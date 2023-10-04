@@ -2,6 +2,7 @@ import gymnasium
 from gymnasium import spaces
 import pygame
 import numpy as np
+from gymnasium.envs.registration import register
 
 
 class GridWorldEnv(gymnasium.Env):
@@ -163,3 +164,13 @@ class GridWorldEnv(gymnasium.Env):
         if self.window is not None:
             pygame.display.quit()
             pygame.quit()
+
+
+# Example for the CartPole environment
+register(
+    # unique identifier for the env `name-version`
+    id="GridWorld-v0",
+    # path to the class for creating the env
+    # Note: entry_point also accept a class as input (and not only a string)
+    entry_point=GridWorldEnv,
+)

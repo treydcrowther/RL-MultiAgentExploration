@@ -4,7 +4,7 @@ import GridWorldEnv
 import gymnasium
 
 
-vec_env = DummyVecEnv([lambda: gymnasium.make("GridWorld-v0", size=5, render_mode="human")])
+vec_env = DummyVecEnv([lambda: gymnasium.make("GridWorld-v0", size=50, render_mode="human")])
 # Parallel environments
 model = A2C.load("GridWorldModel")
 

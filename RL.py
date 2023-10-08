@@ -1,21 +1,20 @@
 import numpy as np
 import gymnasium as gym
 from stable_baselines3 import A2C
+from stable_baselines3 import DQN
+from stable_baselines3 import PPO
+from stable_baselines3.common.env_checker import check_env
+from stable_baselines3.common.vec_env import DummyVecEnv, SubprocVecEnv
 import GridWorldEnv
 
-env = gym.make('GridWorld-v0', size=50)
 
-model = A2C("MlpPolicy", env, verbose=1)
-model.learn(total_timesteps=40_000)
+if __name__ == "__main__":
+    vec_env = SubprocVecEnv([lambda: gym.make("GridWorld-v0", size=50, num_agents=8) for _ in range(8)])
 
-# vec_env = model.get_env()
-# obs = vec_env.reset()
-# for i in range(1000):
-#     action, _state = model.predict(obs, deterministic=True)
-#     obs, reward, done, info = vec_env.step(action)
-#     # vec_env.render("human")
-#     # VecEnv resets automatically
-#     # if done:
-#     #   obs = vec_env.reset()
 
-model.save("GridWorldModel")
+    # check_env(env, warn=True, skip_render_check=True)
+
+    model = PPO("MlpPolicy", vec_env, verbose=1)
+    model.learn(total_timesteps=1_000_000)
+
+    model.save("GridWorldModel")

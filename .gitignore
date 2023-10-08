@@ -52,3 +52,4 @@ docs/_build/
 # PyCharm
 .idea
 envir/
+*.zip

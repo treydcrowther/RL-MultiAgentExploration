@@ -1,12 +1,13 @@
 from stable_baselines3 import A2C  # Import the A2C algorithm
-from stable_baselines3.common.vec_env import DummyVecEnv
+from stable_baselines3 import PPO  # Import the PPO algorithm
+from stable_baselines3.common.vec_env import DummyVecEnv, SubprocVecEnv
 import GridWorldEnv
 import gymnasium
 
 
-vec_env = DummyVecEnv([lambda: gymnasium.make("GridWorld-v0", size=50, render_mode="human")])
+vec_env = DummyVecEnv([lambda: gymnasium.make("GridWorld-v0", size=50, num_agents=8, render_mode="human")])
 # Parallel environments
-model = A2C.load("GridWorldModel")
+model = PPO.load("GridWorldModel")
 
 num_episodes = 10
 for episode in range(num_episodes):

@@ -8,16 +8,23 @@ from gymnasium.envs.registration import register
 class GridWorldEnv(gymnasium.Env):
     metadata = {"render_modes": ["human", "rgb_array"], "render_fps": 4}
 
-    def __init__(self, render_mode=None, size=5):
+    def __init__(self, render_mode=None, size=5, num_agents=2):
         self.size = size  # The size of the square grid
+        self.num_agents = num_agents
         self.window_size = 512  # The size of the PyGame window
 
         # Observations are dictionaries with the agent's and the target's location.
         # Each location is encoded as an element of {0, ..., `size`}^2, i.e. MultiDiscrete([size, size]).
-        self.observation_space = spaces.Box(0, size - 1, shape=(8,), dtype=int)
+        num_values = num_agents * 4
+        self.observation_space = spaces.Box(0, size - 1, shape=(num_values,), dtype=float)
+    
+        self._num_resets = 0
 
         # We have 4 actions, corresponding to "right", "up", "left", "down", "right"
-        self.action_space = spaces.MultiDiscrete([4,4])
+        action_space = []
+        for i in range(num_agents):
+            action_space.append(4)
+        self.action_space = spaces.MultiDiscrete(action_space)
 
         """
         The following dictionary maps abstract actions from `self.action_space` to 
@@ -47,37 +54,39 @@ class GridWorldEnv(gymnasium.Env):
         self.clock = None
 
     def _get_obs(self):
-        return np.concatenate([self._agent_location[0:2], self.closest_non_visited(self._agent_location[0:2]), self._agent_location[2:4], self.closest_non_visited(self._agent_location[2:4])])
+        observation = []
+        for i in range(self.num_agents):
+            agent_location = self._agent_location[i*2:i*2+2]
+            closest_unvisited = self.closest_non_visited(self._agent_location[i*2:i*2+2])
+            observation = np.concatenate((observation, agent_location, closest_unvisited))
+        return observation
 
     def _get_info(self):
         return {
             "distance": np.linalg.norm(
-                self._agent_location[0:2] - self._target_location, ord=1
+                self._agent_location[0:2] - self.closest_non_visited(self._agent_location[0:2]), ord=1
             )
         }
 
     def reset(self, seed=None, options=None):
         # We need the following line to seed self.np_random
         super().reset(seed=seed)
+        self._num_resets += 1
+        print(self._num_resets)
 
         # Choose the agent's location uniformly at random
-        self._agent_location = self.np_random.integers(0, self.size, size=4, dtype=int)
-        # self._previous_loation = self._agent_location
-        # self._previous_goal = self._agent_location
-
-        # # We will sample the target's location randomly until it does not coincide with the agent's location
-        self._target_location = self._agent_location[0:2]
-        # while np.array_equal(self._target_location, self._agent_location):
-        #     self._target_location = self.np_random.integers(
-        #         0, self.size, size=2, dtype=int
-        #     )
+        self._agent_location = self.np_random.integers(0, self.size, size=self.num_agents * 2, dtype=int)
+        self._previous_location = self.np_random.integers(0, self.size, size=self.num_agents * 2, dtype=int)
+        self._two_previous_location = self.np_random.integers(0, self.size, size=self.num_agents * 2, dtype=int)
 
         self._visited = np.zeros((self.size, self.size))
-        self._visited[self._agent_location[0]][self._agent_location[1]] = 1
+        for i in range(0, self.num_agents * 2, 2):
+            self._visited[self._agent_location[i]][self._agent_location[i+1]] = 1
         self._total_steps = 0
 
         observation = self._get_obs()
         info = self._get_info()
+        # print("observation", observation)
 
         if self.render_mode == "human":
             self._render_frame()
@@ -85,53 +94,68 @@ class GridWorldEnv(gymnasium.Env):
         return observation, info
 
     def step(self, action):
-        assert len(action) == 2, "Two actions are required"
-        
-        agent1_action = action[0]
-        agent2_action = action[1]
+        self._two_previous_location = self._previous_location
+        self._previous_location = self._agent_location.copy()
+        # Move the agent
+        for i in range(0, self.num_agents):
+            agent_action = action[i]
+            self._agent_location[i*2:i*2+2] = np.clip(
+                self._agent_location[i*2:i*2+2] + self._action_to_direction[agent_action], 0, self.size - 1
+            )
 
-        # print("action ", agent1_action)
-        # Map the action (element of {0,1,2,3}) to the direction we walk in
-        direction_one = self._action_to_direction[agent1_action]
-        direction_two = self._action_to_direction[agent2_action]
-        # print("direction ", direction_one)
-        # print("direction 2 ", direction_two)
+        # reward = 0
+        # # reward agents for being in the middle
+        # for i in range(0, self.num_agents * 2, 2):
+        #     if(self._agent_location[i] == 3 and self._agent_location[i+1] == 3):
+        #         reward += 1
+        #     else:
+        #         reward += 0
 
-        previous_agent_2_location = self._agent_location[2:4]
-        # We use `np.clip` to make sure we don't leave the grid
-        self._agent_location = np.clip(
-            self._agent_location[0:2] + direction_one, 0, self.size - 1
-        )
-        self._agent_location = np.append(self._agent_location, 
-                                         np.clip(previous_agent_2_location + direction_two, 0, self.size - 1))
-        # An episode is done iff the agent has reached the target
+        # Reward is 1 if we explored the closest space
+        reward = 0
+        for i in range(0, self.num_agents * 2, 2):
+            explored_closest = self._agent_location[i:i+2] == self.closest_non_visited(self._previous_location[i:i+2])
+            reward += 1 if explored_closest.all() else 0
+
         self._total_steps += 1
-        
+        # # # Reward is 1 if we explored a new space
+        # # reward = 0
+        # # for i in range(0, self.num_agents * 2, 2):
+        # #     previously_unvisited = self._visited[self._agent_location[i]][self._agent_location[i+1]] == 0
+        # #     reward += 1 if previously_unvisited else 0
+
+        # # double the reward if all agents explored the closest space
+        # if reward == self.num_agents:
+        #     reward *= 2
+
         # Mark the current location as visited
-        self._visited[self._agent_location[0]][self._agent_location[1]] = 1
-        self._visited[self._agent_location[2]][self._agent_location[3]] = 1
-
-        # Reward is 1 if we explored a new space
-        previously_unvisited = self._visited[self._agent_location[0]][self._agent_location[1]] == 0
-        reward = 1 if previously_unvisited else 0
-
-        second_previously_unvisited = self._visited[self._agent_location[2]][self._agent_location[3]] == 0
-        reward += 1 if second_previously_unvisited else 0
+        for i in range(0, self.num_agents * 2, 2):
+            self._visited[self._agent_location[i]][self._agent_location[i+1]] = 1
 
         # Penalize moving away from the next closest location to explore
         # if(self.calculate_distance(self._agent_location, self.closest_non_visited()) > self.calculate_distance(self._previous_loation, self._previous_goal)):
         #     reward = -.5
-        # # Penalize staying in the same place
-        # if((self._agent_location == self._previous_loation).all()):
-        #     reward  = -1
-        terminated = np.all(self._visited == 1)
-        print("reward: ", reward)
-        print("left unvisited: ", np.sum(self._visited == 0))
+        # Penalize staying in the same place
+        for i in range(0, self.num_agents * 2, 2):
+            if((self._agent_location[i:i+2] == self._previous_location[i:i+2]).all()):
+                reward -= .5
+            elif((self._agent_location[i:i+2] == self._two_previous_location[i:i+2]).all()):
+                reward -= 1
+
+        terminated = bool(np.all(self._visited == 1))
+        terminated = terminated or self._total_steps >= (100 + 50 * self._num_resets)
+        # if(terminated):
+        #     reward += 10
+            # if(self._total_steps <= ((self.size * self.size) / self.num_agents) + 2):
+            #     reward += 30
+
+        # print("reward: ", reward)
+        # print("left unvisited: ", np.sum(self._visited == 0))
 
         # self._previous_loation = self._agent_location
         # self._previous_goal = self.closest_non_visited()
         observation = self._get_obs()
-        print(observation)
+        # print("observation", observation)
         info = self._get_info()
 
         if self.render_mode == "human":
@@ -150,12 +174,12 @@ class GridWorldEnv(gymnasium.Env):
         manhattan_distances = np.sum(distances, axis=1)
 
         if(len(manhattan_distances) == 0):
-            return tuple([0,0])
+            return [0,0]
         # Find the index of the location with the minimum Manhattan distance
         closest_location_index = np.argmin(manhattan_distances)
 
         # Get the closest location
-        return tuple(unvisited_locations[closest_location_index])
+        return unvisited_locations[closest_location_index]
     
     def calculate_distance(self, location_one, location_two):
         return np.linalg.norm(
@@ -192,29 +216,15 @@ class GridWorldEnv(gymnasium.Env):
                             (pix_square_size, pix_square_size),
                         ),
                     )
-        # pygame.draw.rect(
-        #     canvas,
-        #     (255, 0, 0),
-        #     pygame.Rect(
-        #         pix_square_size * self._target_location,
-        #         (pix_square_size, pix_square_size),
-        #     ),
-        # )
-        # Now we draw the agent
-        pygame.draw.circle(
-            canvas,
-            (0, 0, 255),
-            (self._agent_location[0:2] + 0.5) * pix_square_size,
-            pix_square_size / 3,
-        )
 
-        # Now we draw the second agent
-        pygame.draw.circle(
-            canvas,
-            (255, 0, 0),
-            (self._agent_location[2:4] + 0.5) * pix_square_size,
-            pix_square_size / 3,
-        )
+        # Now we draw the agent
+        for i in range(self.num_agents):
+            pygame.draw.circle(
+                canvas,
+                (i*25, 0, 255),
+                (self._agent_location[i*2:i*2+2] + 0.5) * pix_square_size,
+                pix_square_size / 3,
+            )    
 
         # Finally, add some gridlines
         for x in range(self.size + 1):

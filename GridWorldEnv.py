@@ -17,6 +17,10 @@ class GridWorldEnv(gymnasium.Env):
         # Each location is encoded as an element of {0, ..., `size`}^2, i.e. MultiDiscrete([size, size]).
         num_values = num_agents * 4
         self.observation_space = spaces.Box(0, size - 1, shape=(num_values,), dtype=float)
+
+        self.lidarRange = 8
+        self.lidar_sweep_res = (np.arctan2(1, self.lidarRange)%np.pi ) * 2
+        self.lidar_step_res = 1
     
         self._num_resets = 0
 
@@ -80,6 +84,15 @@ class GridWorldEnv(gymnasium.Env):
         self._two_previous_location = self.np_random.integers(0, self.size, size=self.num_agents * 2, dtype=int)
 
         self._visited = np.zeros((self.size, self.size))
+        self._unknown = 0
+        self._frontier = 1
+        self._known_empty = 2
+        self._known_wall = 3
+        self._ground_truth = np.ones((self.size, self.size)) * self._known_empty
+
+        # Place a wall in the middle of the ground truth grid
+        self._ground_truth[self.size // 2, :] = self._known_wall
+
         for i in range(0, self.num_agents * 2, 2):
             self._visited[self._agent_location[i]][self._agent_location[i+1]] = 1
         self._total_steps = 0
@@ -96,12 +109,31 @@ class GridWorldEnv(gymnasium.Env):
     def step(self, action):
         self._two_previous_location = self._previous_location
         self._previous_location = self._agent_location.copy()
-        # Move the agent
+
+        # Move the agent, but prohibit moving through walls and moving outside the grid
         for i in range(0, self.num_agents):
             agent_action = action[i]
-            self._agent_location[i*2:i*2+2] = np.clip(
-                self._agent_location[i*2:i*2+2] + self._action_to_direction[agent_action], 0, self.size - 1
-            )
+            proposed_location = np.clip(self._agent_location[i*2:i*2+2] + self._action_to_direction[agent_action], 0, self.size - 1)
+            if self._ground_truth[proposed_location[0]][proposed_location[1]] != self._known_wall:
+                self._agent_location[i*2:i*2+2] = np.clip(
+                    self._agent_location[i*2:i*2+2] + self._action_to_direction[agent_action], 0, self.size - 1
+                )
+
+
+        # for i in range(0, self.num_agents):
+        #     agent_action = action[i]
+        #     proposed_location = self._agent_location[i*2:i*2+2] + self._action_to_direction[agent_action]
+        #     if self._ground_truth[proposed_location[0]][proposed_location[1]] != self._known_wall:
+        #         self._agent_location[i*2:i*2+2] = np.clip(
+        #             self._agent_location[i*2:i*2+2] + self._action_to_direction[agent_action], 0, self.size - 1
+        #         )
+
+        # # Move the agent
+        # for i in range(0, self.num_agents):
+        #     agent_action = action[i]
+        #     self._agent_location[i*2:i*2+2] = np.clip(
+        #         self._agent_location[i*2:i*2+2] + self._action_to_direction[agent_action], 0, self.size - 1
+        #     )
 
         # reward = 0
         # # reward agents for being in the middle
@@ -132,6 +164,8 @@ class GridWorldEnv(gymnasium.Env):
         for i in range(0, self.num_agents * 2, 2):
             self._visited[self._agent_location[i]][self._agent_location[i+1]] = 1
 
+        self.scan()
+
         # Penalize moving away from the next closest location to explore
         # if(self.calculate_distance(self._agent_location, self.closest_non_visited()) > self.calculate_distance(self._previous_loation, self._previous_goal)):
         #     reward = -.5
@@ -143,7 +177,7 @@ class GridWorldEnv(gymnasium.Env):
                 reward -= 1
 
         terminated = bool(np.all(self._visited == 1))
-        terminated = terminated or self._total_steps >= (100 + 50 * self._num_resets)
+        # terminated = terminated or self._total_steps >= (100 + 50 * self._num_resets)
         # if(terminated):
         #     reward += 10
             # if(self._total_steps <= ((self.size * self.size) / self.num_agents) + 2):
@@ -185,6 +219,49 @@ class GridWorldEnv(gymnasium.Env):
         return np.linalg.norm(
             location_one - location_two, ord=1
         )
+    
+
+    # def _scan_area(self):
+    #     for i in range(0, self.num_agents):
+    #         for x in range(self._agent_location[i*2] - self._sensor_range, self._agent_location[i*2] + self._sensor_range + 1):
+    #             for y in range(self._agent_location[i*2+1] - self._sensor_range, self._agent_location[i*2+1] + self._sensor_range + 1):
+    #                 if(x >= 0 and x < self.size and y >= 0 and y < self.size):
+    #                     self._visited[x][y] = 1
+
+    def scan(self):
+        for agent_num in range(0, self.num_agents):
+            for i, angle in enumerate(np.arange(0, 2*np.pi, self.lidar_sweep_res)):
+
+                position_x = self._agent_location[agent_num*2]
+                position_y = self._agent_location[agent_num*2+1]
+
+                ray_cast_samples = np.arange(0,self.lidarRange, self.lidar_step_res)
+                for j, r in enumerate(ray_cast_samples):
+                    # self.world_ax.add_patch(plt.Circle((self.pose_rc[1], self.pose_rc[0]), r, color='pink', fill=False))
+
+                    # get the point rounded to the nearest grid
+                    x = int(np.round(position_x + r*np.sin(angle)))
+                    y = int(np.round(position_y + r*np.cos(angle)))
+
+                    if x < 0 or x >= self.size or y < 0 or y >= self.size:
+                        break
+                    sampled_point= self._ground_truth[x][y]
+                    if sampled_point == self._known_wall:# obstacle
+                        self._visited[x][y] = self._known_wall
+                        # ddraw the obstacle
+                        # if self.screen is not None:
+                        #     pygame.draw.circle(self.screen, color= self.cfg.RED, center=(x*self.grid_size, y*self.grid_size), radius=self.grid_size//2)
+
+                        break
+                    if r == max(ray_cast_samples):# frontier
+                        if self._ground_truth[x][y] == self._known_empty:
+                            break
+                        self._visited[x][y] = self._frontier
+                        break
+                    # free space
+                    self._visited[x][y] = self._known_empty
+                    
+    
 
     def render(self):
         if self.render_mode == "rgb_array":
@@ -204,13 +281,39 @@ class GridWorldEnv(gymnasium.Env):
             self.window_size / self.size
         )  # The size of a single grid square in pixels
 
-        # First we draw the target
+        # First we draw the visited locations
         for x in range(self.size):
             for y in range(self.size):
-                if self._visited[x][y] == 1:
+                if self._visited[x][y] == self._known_empty:
                     pygame.draw.rect(
                         canvas,
                         (0, 255, 0),
+                        pygame.Rect(
+                            pix_square_size * np.array([x, y]),
+                            (pix_square_size, pix_square_size),
+                        ),
+                    )
+
+        # Next we draw the frontier locations
+        for x in range(self.size):
+            for y in range(self.size):
+                if self._visited[x][y] == self._frontier:
+                    pygame.draw.rect(
+                        canvas,
+                        (255, 255, 0),
+                        pygame.Rect(
+                            pix_square_size * np.array([x, y]),
+                            (pix_square_size, pix_square_size),
+                        ),
+                    )
+
+        # Next we draw the wall locations
+        for x in range(self.size):
+            for y in range(self.size):
+                if self._visited[x][y] == self._known_wall:
+                    pygame.draw.rect(
+                        canvas,
+                        (255, 0, 0),
                         pygame.Rect(
                             pix_square_size * np.array([x, y]),
                             (pix_square_size, pix_square_size),

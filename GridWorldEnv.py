@@ -90,8 +90,8 @@ class GridWorldEnv(gymnasium.Env):
         self._known_wall = 3
         self._ground_truth = np.ones((self.size, self.size)) * self._known_empty
 
-        # Place a wall in the middle of the ground truth grid
-        self._ground_truth[self.size // 2, :] = self._known_wall
+        # # Place a wall in the middle of the ground truth grid
+        # self._ground_truth[self.size // 2, :] = self._known_wall
 
         for i in range(0, self.num_agents * 2, 2):
             self._visited[self._agent_location[i]][self._agent_location[i+1]] = 1
@@ -144,10 +144,10 @@ class GridWorldEnv(gymnasium.Env):
         #         reward += 0
 
         # Reward is 1 if we explored the closest space
-        reward = 0
-        for i in range(0, self.num_agents * 2, 2):
-            explored_closest = self._agent_location[i:i+2] == self.closest_non_visited(self._previous_location[i:i+2])
-            reward += 1 if explored_closest.all() else 0
+        # reward = 0
+        # for i in range(0, self.num_agents * 2, 2):
+        #     explored_closest = self._agent_location[i:i+2] == self.closest_non_visited(self._previous_location[i:i+2])
+        #     reward += 1 if explored_closest.all() else 0
 
         self._total_steps += 1
         # # # Reward is 1 if we explored a new space
@@ -161,10 +161,10 @@ class GridWorldEnv(gymnasium.Env):
         #     reward *= 2
 
         # Mark the current location as visited
-        for i in range(0, self.num_agents * 2, 2):
-            self._visited[self._agent_location[i]][self._agent_location[i+1]] = 1
+        # for i in range(0, self.num_agents * 2, 2):
+        #     self._visited[self._agent_location[i]][self._agent_location[i+1]] = 1
 
-        self.scan()
+        reward = self.scan()
 
         # Penalize moving away from the next closest location to explore
         # if(self.calculate_distance(self._agent_location, self.closest_non_visited()) > self.calculate_distance(self._previous_loation, self._previous_goal)):
@@ -176,7 +176,14 @@ class GridWorldEnv(gymnasium.Env):
             elif((self._agent_location[i:i+2] == self._two_previous_location[i:i+2]).all()):
                 reward -= 1
 
-        terminated = bool(np.all(self._visited == 1))
+
+        print(reward)
+        # Finish if all elements are known wall or known empty
+        terminated = np.all(
+            (self._visited == self._known_wall) | (self._visited == self._known_empty)
+        )
+        reward += 100 if terminated else 0
+
         # terminated = terminated or self._total_steps >= (100 + 50 * self._num_resets)
         # if(terminated):
         #     reward += 10
@@ -195,12 +202,13 @@ class GridWorldEnv(gymnasium.Env):
         if self.render_mode == "human":
             self._render_frame()
 
+        print("observation", observation)
         return observation, reward, terminated, False, info
 
     def closest_non_visited(self, agent_location):
-        # Find the locations where the grid is not equal to 1
-        unvisited_locations = np.argwhere(self._visited != 1)
-
+        # Find the locations where the grid is unknown
+        unvisited_locations = np.argwhere(self._visited == self._unknown)
+        
         # Calculate the Manhattan distance to each non-one location
         distances = np.abs(unvisited_locations - np.array(agent_location))
 
@@ -214,6 +222,24 @@ class GridWorldEnv(gymnasium.Env):
 
         # Get the closest location
         return unvisited_locations[closest_location_index]
+    
+    def closest_wall(self, agent_location):
+        # Find the locations where the known map is a wall
+        wall_locations = np.argwhere(self._ground_truth == self._known_wall)
+
+        # Calculate the Manhattan distance to each non-one location
+        distances = np.abs(wall_locations - np.array(agent_location))
+
+        # Calculate the sum of distances along axis 1 to get Manhattan distances
+        manhattan_distances = np.sum(distances, axis=1)
+
+        if(len(manhattan_distances) == 0):
+            return [0,0]
+        # Find the index of the location with the minimum Manhattan distance
+        closest_location_index = np.argmin(manhattan_distances)
+
+        # Get the closest location
+        return wall_locations[closest_location_index]
     
     def calculate_distance(self, location_one, location_two):
         return np.linalg.norm(
@@ -229,16 +255,14 @@ class GridWorldEnv(gymnasium.Env):
     #                     self._visited[x][y] = 1
 
     def scan(self):
+        total_learned = 0
         for agent_num in range(0, self.num_agents):
             for i, angle in enumerate(np.arange(0, 2*np.pi, self.lidar_sweep_res)):
-
                 position_x = self._agent_location[agent_num*2]
                 position_y = self._agent_location[agent_num*2+1]
 
                 ray_cast_samples = np.arange(0,self.lidarRange, self.lidar_step_res)
                 for j, r in enumerate(ray_cast_samples):
-                    # self.world_ax.add_patch(plt.Circle((self.pose_rc[1], self.pose_rc[0]), r, color='pink', fill=False))
-
                     # get the point rounded to the nearest grid
                     x = int(np.round(position_x + r*np.sin(angle)))
                     y = int(np.round(position_y + r*np.cos(angle)))
@@ -248,10 +272,6 @@ class GridWorldEnv(gymnasium.Env):
                     sampled_point= self._ground_truth[x][y]
                     if sampled_point == self._known_wall:# obstacle
                         self._visited[x][y] = self._known_wall
-                        # ddraw the obstacle
-                        # if self.screen is not None:
-                        #     pygame.draw.circle(self.screen, color= self.cfg.RED, center=(x*self.grid_size, y*self.grid_size), radius=self.grid_size//2)
-
                         break
                     if r == max(ray_cast_samples):# frontier
                         if self._ground_truth[x][y] == self._known_empty:
@@ -259,9 +279,11 @@ class GridWorldEnv(gymnasium.Env):
                         self._visited[x][y] = self._frontier
                         break
                     # free space
+                    if self._visited[x][y] != self._known_empty:
+                        total_learned += 1
                     self._visited[x][y] = self._known_empty
+        return total_learned
                     
-    
 
     def render(self):
         if self.render_mode == "rgb_array":

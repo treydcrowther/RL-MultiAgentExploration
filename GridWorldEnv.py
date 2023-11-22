@@ -18,6 +18,8 @@ class GridWorldEnv(gymnasium.Env):
         num_values = num_agents * 4
         self.observation_space = spaces.Box(0, size - 1, shape=(num_values,), dtype=float)
 
+        self._percent_explored = []
+
         self.lidarRange = 8
         self.lidar_sweep_res = (np.arctan2(1, self.lidarRange)%np.pi ) * 2
         self.lidar_step_res = 1
@@ -76,7 +78,7 @@ class GridWorldEnv(gymnasium.Env):
         # We need the following line to seed self.np_random
         super().reset(seed=seed)
         self._num_resets += 1
-        print(self._num_resets)
+        # print(self._num_resets)
 
         # Choose the agent's location uniformly at random
         self._agent_location = self.np_random.integers(0, self.size, size=self.num_agents * 2, dtype=int)
@@ -89,12 +91,22 @@ class GridWorldEnv(gymnasium.Env):
         self._known_empty = 2
         self._known_wall = 3
         self._ground_truth = np.ones((self.size, self.size)) * self._known_empty
+        self._previous_observation = self._get_obs()
 
-        # # Place a wall in the middle of the ground truth grid
-        # self._ground_truth[self.size // 2, :] = self._known_wall
+        # Save the csv if the _percent_explored list is not empty
+        if len(self._percent_explored) > 0:
+            #Save the percent explored to a csv file with 2 decimal places
+            # create the file name with the number of resets included
+            file_name = "percent_explored" + str(self._num_resets / 2) + ".csv"
+            np.savetxt(file_name, self._percent_explored, fmt='%s', delimiter=",")
+
+
+
+        self._percent_explored = []
+
 
         for i in range(0, self.num_agents * 2, 2):
-            self._visited[self._agent_location[i]][self._agent_location[i+1]] = 1
+            self._visited[self._agent_location[i]][self._agent_location[i+1]] = self._known_empty
         self._total_steps = 0
 
         observation = self._get_obs()
@@ -119,90 +131,58 @@ class GridWorldEnv(gymnasium.Env):
                     self._agent_location[i*2:i*2+2] + self._action_to_direction[agent_action], 0, self.size - 1
                 )
 
-
-        # for i in range(0, self.num_agents):
-        #     agent_action = action[i]
-        #     proposed_location = self._agent_location[i*2:i*2+2] + self._action_to_direction[agent_action]
-        #     if self._ground_truth[proposed_location[0]][proposed_location[1]] != self._known_wall:
-        #         self._agent_location[i*2:i*2+2] = np.clip(
-        #             self._agent_location[i*2:i*2+2] + self._action_to_direction[agent_action], 0, self.size - 1
-        #         )
-
-        # # Move the agent
-        # for i in range(0, self.num_agents):
-        #     agent_action = action[i]
-        #     self._agent_location[i*2:i*2+2] = np.clip(
-        #         self._agent_location[i*2:i*2+2] + self._action_to_direction[agent_action], 0, self.size - 1
-        #     )
-
-        # reward = 0
-        # # reward agents for being in the middle
-        # for i in range(0, self.num_agents * 2, 2):
-        #     if(self._agent_location[i] == 3 and self._agent_location[i+1] == 3):
-        #         reward += 1
-        #     else:
-        #         reward += 0
-
-        # Reward is 1 if we explored the closest space
-        # reward = 0
-        # for i in range(0, self.num_agents * 2, 2):
-        #     explored_closest = self._agent_location[i:i+2] == self.closest_non_visited(self._previous_location[i:i+2])
-        #     reward += 1 if explored_closest.all() else 0
-
         self._total_steps += 1
-        # # # Reward is 1 if we explored a new space
-        # # reward = 0
-        # # for i in range(0, self.num_agents * 2, 2):
-        # #     previously_unvisited = self._visited[self._agent_location[i]][self._agent_location[i+1]] == 0
-        # #     reward += 1 if previously_unvisited else 0
+        # calculate the percent explored thus far
+        percent_explored = np.sum(self._visited == self._known_empty) / (self.size * self.size)
+        # format the percent explored to be only 2 decimal places
+        self._percent_explored.append("{:.4f}".format(percent_explored))
 
-        # # double the reward if all agents explored the closest space
-        # if reward == self.num_agents:
-        #     reward *= 2
-
-        # Mark the current location as visited
-        # for i in range(0, self.num_agents * 2, 2):
-        #     self._visited[self._agent_location[i]][self._agent_location[i+1]] = 1
-
-        reward = self.scan()
-
-        # Penalize moving away from the next closest location to explore
-        # if(self.calculate_distance(self._agent_location, self.closest_non_visited()) > self.calculate_distance(self._previous_loation, self._previous_goal)):
-        #     reward = -.5
-        # Penalize staying in the same place
-        for i in range(0, self.num_agents * 2, 2):
-            if((self._agent_location[i:i+2] == self._previous_location[i:i+2]).all()):
-                reward -= .5
-            elif((self._agent_location[i:i+2] == self._two_previous_location[i:i+2]).all()):
-                reward -= 1
+        self.scan()
 
 
-        print(reward)
+        reward = 0
+        agent_num = 0
+        did_not_move = False
+        for i in range(0, self.num_agents * 4, 4):
+            current_location = self._agent_location[agent_num * 2:agent_num*2 + 2]
+            previous_location = self._previous_observation[i:i+2]
+            previous_closest = self._previous_observation[i+2:i+4]
+
+            distance_to_closest = self.calculate_distance(current_location, previous_closest)
+            previous_distance_to_closest = self.calculate_distance(previous_location, previous_closest)
+            reward += 1 if distance_to_closest < previous_distance_to_closest else 0
+
+            if(current_location[0] == 0 or current_location[0] >= self.size -1 or current_location[1] <= 0 or current_location[1] >= self.size - 1):
+                reward = -10
+                break
+            if((current_location == self._previous_location[agent_num * 2:agent_num * 2 + 2]).all()):
+                did_not_move = True
+            if((current_location == self._two_previous_location[agent_num * 2:agent_num * 2 + 2]).all()):
+                did_not_move = True
+
+            agent_num += 1
+
+        if(did_not_move and reward != -10):
+            reward = -1
+        elif(reward != self.num_agents and reward != -10):
+            reward = 0
+        elif(reward == self.num_agents):
+            reward = 1
         # Finish if all elements are known wall or known empty
         terminated = np.all(
             (self._visited == self._known_wall) | (self._visited == self._known_empty)
         )
         reward += 100 if terminated else 0
 
-        # terminated = terminated or self._total_steps >= (100 + 50 * self._num_resets)
-        # if(terminated):
-        #     reward += 10
-            # if(self._total_steps <= ((self.size * self.size) / self.num_agents) + 2):
-            #     reward += 30
-
-        # print("reward: ", reward)
-        # print("left unvisited: ", np.sum(self._visited == 0))
-
-        # self._previous_loation = self._agent_location
-        # self._previous_goal = self.closest_non_visited()
         observation = self._get_obs()
+        self._previous_observation = observation
         # print("observation", observation)
         info = self._get_info()
 
         if self.render_mode == "human":
             self._render_frame()
 
-        print("observation", observation)
+        # print("observation", observation)
         return observation, reward, terminated, False, info
 
     def closest_non_visited(self, agent_location):

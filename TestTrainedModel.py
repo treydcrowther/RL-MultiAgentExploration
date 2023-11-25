@@ -5,9 +5,9 @@ import GridWorldEnv
 import gymnasium
 
 
-vec_env = DummyVecEnv([lambda: gymnasium.make("GridWorld-v0", size=50, num_agents=8, render_mode="human")])
+vec_env = DummyVecEnv([lambda: gymnasium.make("GridWorld-v0", size=15, num_agents=2, render_mode="human")])
 # Parallel environments
-model = PPO.load("NewWorldModel")
+model = PPO.load("TestFullInformation2Agents")
 
 num_episodes = 50
 for episode in range(num_episodes):

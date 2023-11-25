@@ -15,12 +15,12 @@ class GridWorldEnv(gymnasium.Env):
 
         # Observations are dictionaries with the agent's and the target's location.
         # Each location is encoded as an element of {0, ..., `size`}^2, i.e. MultiDiscrete([size, size]).
-        num_values = num_agents * 4
-        self.observation_space = spaces.Box(0, size - 1, shape=(num_values,), dtype=float)
+        num_values = size * size
+        self.observation_space = spaces.Box(0, num_agents + 2, shape=(num_values,), dtype=float)
 
-        self._percent_explored = []
+        # self._percent_explored = []
 
-        self.lidarRange = 8
+        self.lidarRange = 3
         self.lidar_sweep_res = (np.arctan2(1, self.lidarRange)%np.pi ) * 2
         self.lidar_step_res = 1
     
@@ -61,10 +61,25 @@ class GridWorldEnv(gymnasium.Env):
 
     def _get_obs(self):
         observation = []
-        for i in range(self.num_agents):
-            agent_location = self._agent_location[i*2:i*2+2]
-            closest_unvisited = self.closest_non_visited(self._agent_location[i*2:i*2+2])
-            observation = np.concatenate((observation, agent_location, closest_unvisited))
+
+        # Give flattened version of the map
+        for i in range(self.size):
+            for j in range(self.size):
+                # check if any of the agents are at this location
+                agent_here = False
+                for k in range(self.num_agents):
+                    if(i == self._agent_location[k*2] and j == self._agent_location[k*2+1]):
+                        observation.append(k + 3)
+                        agent_here = True
+                        break
+                if(agent_here):
+                    continue
+                observation.append(self._visited[i][j])
+
+        # for i in range(self.num_agents):
+        #     agent_location = self._agent_location[i*2:i*2+2]
+        #     closest_unvisited = self.closest_non_visited(self._agent_location[i*2:i*2+2])
+        #     observation = np.concatenate((observation, agent_location, closest_unvisited))
         return observation
 
     def _get_info(self):
@@ -82,28 +97,20 @@ class GridWorldEnv(gymnasium.Env):
 
         # Choose the agent's location uniformly at random
         self._agent_location = self.np_random.integers(0, self.size, size=self.num_agents * 2, dtype=int)
-        self._previous_location = self.np_random.integers(0, self.size, size=self.num_agents * 2, dtype=int)
-        self._two_previous_location = self.np_random.integers(0, self.size, size=self.num_agents * 2, dtype=int)
 
         self._visited = np.zeros((self.size, self.size))
         self._unknown = 0
-        self._frontier = 1
-        self._known_empty = 2
-        self._known_wall = 3
-        self._ground_truth = np.ones((self.size, self.size)) * self._known_empty
-        self._previous_observation = self._get_obs()
+        self._known_empty = 1
+        self._ground_truth = np.ones((self.size, self.size))
 
-        # Save the csv if the _percent_explored list is not empty
-        if len(self._percent_explored) > 0:
-            #Save the percent explored to a csv file with 2 decimal places
-            # create the file name with the number of resets included
-            file_name = "percent_explored" + str(self._num_resets / 2) + ".csv"
-            np.savetxt(file_name, self._percent_explored, fmt='%s', delimiter=",")
+        # # Save the csv if the _percent_explored list is not empty
+        # if len(self._percent_explored) > 0:
+        #     #Save the percent explored to a csv file with 2 decimal places
+        #     # create the file name with the number of resets included
+        #     file_name = "percent_explored" + str(self._num_resets / 2) + ".csv"
+        #     np.savetxt(file_name, self._percent_explored, fmt='%s', delimiter=",")
 
-
-
-        self._percent_explored = []
-
+        # self._percent_explored = []
 
         for i in range(0, self.num_agents * 2, 2):
             self._visited[self._agent_location[i]][self._agent_location[i+1]] = self._known_empty
@@ -119,63 +126,34 @@ class GridWorldEnv(gymnasium.Env):
         return observation, info
 
     def step(self, action):
-        self._two_previous_location = self._previous_location
-        self._previous_location = self._agent_location.copy()
-
-        # Move the agent, but prohibit moving through walls and moving outside the grid
         for i in range(0, self.num_agents):
             agent_action = action[i]
-            proposed_location = np.clip(self._agent_location[i*2:i*2+2] + self._action_to_direction[agent_action], 0, self.size - 1)
-            if self._ground_truth[proposed_location[0]][proposed_location[1]] != self._known_wall:
-                self._agent_location[i*2:i*2+2] = np.clip(
-                    self._agent_location[i*2:i*2+2] + self._action_to_direction[agent_action], 0, self.size - 1
-                )
+            self._agent_location[i*2:i*2+2] = np.clip(
+                self._agent_location[i*2:i*2+2] + self._action_to_direction[agent_action], 0, self.size - 1
+            )
 
         self._total_steps += 1
         # calculate the percent explored thus far
-        percent_explored = np.sum(self._visited == self._known_empty) / (self.size * self.size)
+        # percent_explored = np.sum(self._visited == self._known_empty) / (self.size * self.size)
         # format the percent explored to be only 2 decimal places
-        self._percent_explored.append("{:.4f}".format(percent_explored))
-
-        self.scan()
-
+        # self._percent_explored.append("{:.4f}".format(percent_explored))
 
         reward = 0
-        agent_num = 0
-        did_not_move = False
-        for i in range(0, self.num_agents * 4, 4):
-            current_location = self._agent_location[agent_num * 2:agent_num*2 + 2]
-            previous_location = self._previous_observation[i:i+2]
-            previous_closest = self._previous_observation[i+2:i+4]
+        # Give 1 reward for each new square explored 
+        reward = self.scan()
 
-            distance_to_closest = self.calculate_distance(current_location, previous_closest)
-            previous_distance_to_closest = self.calculate_distance(previous_location, previous_closest)
-            reward += 1 if distance_to_closest < previous_distance_to_closest else 0
-
-            if(current_location[0] == 0 or current_location[0] >= self.size -1 or current_location[1] <= 0 or current_location[1] >= self.size - 1):
-                reward = -10
-                break
-            if((current_location == self._previous_location[agent_num * 2:agent_num * 2 + 2]).all()):
-                did_not_move = True
-            if((current_location == self._two_previous_location[agent_num * 2:agent_num * 2 + 2]).all()):
-                did_not_move = True
-
-            agent_num += 1
-
-        if(did_not_move and reward != -10):
+        if(reward == 0):
             reward = -1
-        elif(reward != self.num_agents and reward != -10):
-            reward = 0
-        elif(reward == self.num_agents):
-            reward = 1
+
         # Finish if all elements are known wall or known empty
         terminated = np.all(
-            (self._visited == self._known_wall) | (self._visited == self._known_empty)
+            (self._visited == self._known_empty)
         )
+        terminated = terminated or self._total_steps >= (self.size * self.size * 2)
+
         reward += 100 if terminated else 0
 
         observation = self._get_obs()
-        self._previous_observation = observation
         # print("observation", observation)
         info = self._get_info()
 
@@ -202,24 +180,6 @@ class GridWorldEnv(gymnasium.Env):
 
         # Get the closest location
         return unvisited_locations[closest_location_index]
-    
-    def closest_wall(self, agent_location):
-        # Find the locations where the known map is a wall
-        wall_locations = np.argwhere(self._ground_truth == self._known_wall)
-
-        # Calculate the Manhattan distance to each non-one location
-        distances = np.abs(wall_locations - np.array(agent_location))
-
-        # Calculate the sum of distances along axis 1 to get Manhattan distances
-        manhattan_distances = np.sum(distances, axis=1)
-
-        if(len(manhattan_distances) == 0):
-            return [0,0]
-        # Find the index of the location with the minimum Manhattan distance
-        closest_location_index = np.argmin(manhattan_distances)
-
-        # Get the closest location
-        return wall_locations[closest_location_index]
     
     def calculate_distance(self, location_one, location_two):
         return np.linalg.norm(
@@ -250,9 +210,9 @@ class GridWorldEnv(gymnasium.Env):
                     if x < 0 or x >= self.size or y < 0 or y >= self.size:
                         break
                     sampled_point= self._ground_truth[x][y]
-                    if sampled_point == self._known_wall:# obstacle
-                        self._visited[x][y] = self._known_wall
-                        break
+                    # if sampled_point == self._known_wall:# obstacle
+                    #     self._visited[x][y] = self._known_wall
+                    #     break
                     if r == max(ray_cast_samples):# frontier
                         if self._ground_truth[x][y] == self._known_empty:
                             break
@@ -296,31 +256,31 @@ class GridWorldEnv(gymnasium.Env):
                         ),
                     )
 
-        # Next we draw the frontier locations
-        for x in range(self.size):
-            for y in range(self.size):
-                if self._visited[x][y] == self._frontier:
-                    pygame.draw.rect(
-                        canvas,
-                        (255, 255, 0),
-                        pygame.Rect(
-                            pix_square_size * np.array([x, y]),
-                            (pix_square_size, pix_square_size),
-                        ),
-                    )
+        # # Next we draw the frontier locations
+        # for x in range(self.size):
+        #     for y in range(self.size):
+        #         if self._visited[x][y] == self._frontier:
+        #             pygame.draw.rect(
+        #                 canvas,
+        #                 (255, 255, 0),
+        #                 pygame.Rect(
+        #                     pix_square_size * np.array([x, y]),
+        #                     (pix_square_size, pix_square_size),
+        #                 ),
+        #             )
 
-        # Next we draw the wall locations
-        for x in range(self.size):
-            for y in range(self.size):
-                if self._visited[x][y] == self._known_wall:
-                    pygame.draw.rect(
-                        canvas,
-                        (255, 0, 0),
-                        pygame.Rect(
-                            pix_square_size * np.array([x, y]),
-                            (pix_square_size, pix_square_size),
-                        ),
-                    )
+        # # Next we draw the wall locations
+        # for x in range(self.size):
+        #     for y in range(self.size):
+        #         if self._visited[x][y] == self._known_wall:
+        #             pygame.draw.rect(
+        #                 canvas,
+        #                 (255, 0, 0),
+        #                 pygame.Rect(
+        #                     pix_square_size * np.array([x, y]),
+        #                     (pix_square_size, pix_square_size),
+        #                 ),
+        #             )
 
         # Now we draw the agent
         for i in range(self.num_agents):

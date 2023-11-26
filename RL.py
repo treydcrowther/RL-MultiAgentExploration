@@ -21,8 +21,8 @@ from os.path import exists
 
 if __name__ == "__main__":
 
-    if(not exists("TestFullInformation2Agents.zip")):
-        vec_env = SubprocVecEnv([lambda: gym.make("GridWorld-v0", size=15, num_agents=2) for _ in range(8)])
+    if(not exists("FullInformation8Agents.zip")):
+        vec_env = SubprocVecEnv([lambda: gym.make("GridWorld-v0", size=50, num_agents=8) for _ in range(8)])
 
         print("recreating")
         # model = PPO("MlpPolicy", vec_env, verbose=1)
@@ -30,16 +30,16 @@ if __name__ == "__main__":
 
         model.learn(total_timesteps=100_000)
 
-        model.save("TestFullInformation2Agents")
+        model.save("FullInformation8Agents")
     else:
         print("not recreating")
 
     for i in range(500):
-        vec_env = SubprocVecEnv([lambda: gym.make("GridWorld-v0", size=15, num_agents=2) for _ in range(8)])
+        vec_env = SubprocVecEnv([lambda: gym.make("GridWorld-v0", size=50, num_agents=8) for _ in range(8)])
 
         # model = PPO("MlpPolicy", vec_env, verbose=1)
-        model = PPO.load("TestFullInformation2Agents", vec_env)
+        model = PPO.load("FullInformation8Agents", vec_env)
 
         model.learn(total_timesteps=100_000)
 
-        model.save("TestFullInformation2Agents")
+        model.save("FullInformation8Agents")
